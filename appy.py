@@ -81,17 +81,17 @@ if uploaded_files:
 
             df = df_raw.copy()
 
-            # 3. TRATAMENTO DE DATAS
+            # 3. TRATAMENTO E FORMATAÇÃO DE DATAS NO PADRÃO BRASILEIRO (DD/MM/AAAA)
             if col_dt_ini and col_dt_ini in df.columns:
-                df['DT_INI_DT'] = pd.to_datetime(df[col_dt_ini], errors='coerce')
+                df['DT_INI_DT'] = pd.to_datetime(df[col_dt_ini], errors='coerce', format='mixed')
                 df['DATA_LEITURA'] = df['DT_INI_DT'].dt.strftime('%d/%m/%Y').fillna('Sem Data')
             else:
                 df['DT_INI_DT'] = pd.NaT
                 df['DATA_LEITURA'] = 'Sem Data'
 
             if col_dt_prev and col_dt_prev in df.columns:
-                df['DAT_PREVISTA_DT'] = pd.to_datetime(df[col_dt_prev], errors='coerce')
-                df['DATA_PREVISTA_STR'] = df['DAT_PREVISTA_DT'].dt.strftime('%d/%m/%Y').fillna(df[col_dt_prev].astype(str))
+                dt_prev_parsed = pd.to_datetime(df[col_dt_prev], errors='coerce', format='mixed')
+                df['DATA_PREVISTA_STR'] = dt_prev_parsed.dt.strftime('%d/%m/%Y').fillna('Não Informada')
             else:
                 df['DATA_PREVISTA_STR'] = 'Não Informada'
 
