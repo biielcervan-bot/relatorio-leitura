@@ -21,17 +21,14 @@ if uploaded_files:
         for file in uploaded_files:
             df_temp = None
             if file.name.endswith('.csv'):
+                # Tenta diferentes codificações e separadores sem descartar linhas
                 for enc in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
                     try:
                         file.seek(0)
-                        # Leitura com motor Python flexível para suportar quebras de linha em campos
-                        df_temp = pd.read_csv(
-                            file, 
-                            sep=None, 
-                            encoding=enc, 
-                            engine='python',
-                            on_bad_lines='skip'
-                        )
+                        df_temp = pd.read_csv(file, sep=';', encoding=enc)
+                        if len(df_temp.columns) <= 1:
+                            file.seek(0)
+                            df_temp = pd.read_csv(file, sep=',', encoding=enc)
                         break
                     except Exception:
                         continue
@@ -44,54 +41,54 @@ if uploaded_files:
         if lista_dfs:
             df_raw = pd.concat(lista_dfs, ignore_index=True)
             df_raw.columns = df_raw.columns.str.strip()
-            
-            # 🧹 HIGIENIZAÇÃO GERAL EM TODAS AS COLUNAS
-            # Substitui quebras de linha (\n / \r) e limpa espaços em TODAS as colunas de texto
+
+            # 🧹 Limpeza de quebras de linha e espaços nas colunas de texto
             for col in df_raw.columns:
                 if df_raw[col].dtype == 'object':
                     df_raw[col] = (
                         df_raw[col]
                         .astype(str)
-                        .str.replace(r'[\r\n]+', ' ', regex=True) # Troca quebra de linha por espaço
-                        .str.replace(r'\s+', ' ', regex=True)     # Remove múltiplos espaços
+                        .str.replace(r'[\r\n]+', ' ', regex=True)
+                        .str.replace(r'\s+', ' ', regex=True)
                         .str.strip()
                     )
 
             total_linhas_brutas = len(df_raw)
 
-            # 1. Filtro Flexível: Considera qualquer variação da palavra 'leitura'
+            # 1. Filtro do TIPO_ATIVIDADE (Considera variações de 'leitura')
             if 'TIPO_ATIVIDADE' in df_raw.columns:
-                df = df_raw[df_raw['TIPO_ATIVIDADE'].str.lower().str.contains('leitura', na=False)].copy()
+                mask_leitura = df_raw['TIPO_ATIVIDADE'].fillna('').str.lower().str.contains('leitura', na=False)
+                df = df_raw[mask_leitura].copy()
             else:
                 df = df_raw.copy()
 
             total_linhas_processadas = len(df)
             descartadas = total_linhas_brutas - total_linhas_processadas
 
-            # Diagnóstico visual de carga
+            # Diagnóstico de Carga
             st.info(
                 f"ℹ️ **Diagnóstico de Carga de Dados:** "
                 f"Foram identificadas **{total_linhas_brutas} linhas** no arquivo. "
-                f"**{total_linhas_processadas} linhas** foram processadas como atividades de leitura. "
-                f"({descartadas} linhas de início de turno/deslocamento foram descartadas)."
+                f"**{total_linhas_processadas} leituras** foram processadas. "
+                f"({descartadas} eventos de sistema foram desconsiderados)."
             )
 
             if df.empty:
                 st.warning("⚠️ Nenhum registro contendo 'Leitura' foi encontrado na coluna TIPO_ATIVIDADE.")
             else:
-                # 2. Tratamento de Datas e Horários (DT_INI_ACAO)
+                # 2. Tratamento de Datas e Horários
                 df['DT_INI_DT'] = pd.to_datetime(df['DT_INI_ACAO'], dayfirst=True, errors='coerce')
                 df['DATA_LEITURA'] = df['DT_INI_DT'].dt.strftime('%d/%m/%Y').fillna('Sem Data')
                 df['HORA_LEITURA'] = df['DT_INI_DT'].dt.strftime('%H:%M').fillna('N/A')
 
-                # 3. Tratamento da Data Prevista (DAT_PREVISTA)
+                # 3. Tratamento da Data Prevista
                 if 'DAT_PREVISTA' in df.columns:
                     df['DAT_PREVISTA_DT'] = pd.to_datetime(df['DAT_PREVISTA'], dayfirst=True, errors='coerce')
                     df['DATA_PREVISTA_STR'] = df['DAT_PREVISTA_DT'].dt.strftime('%d/%m/%Y').fillna(df['DAT_PREVISTA'].astype(str))
                 else:
                     df['DATA_PREVISTA_STR'] = 'Não Informada'
 
-                # 4. Tratamento dos Impedimentos (IND_STATUS_VISITA e COD_NOTA_VISITA)
+                # 4. Tratamento dos Impedimentos
                 def limpa_nota_codigo(val):
                     if pd.isna(val) or str(val).strip() in ['nan', 'None', '']:
                         return ""
@@ -103,12 +100,11 @@ if uploaded_files:
                 df['NOTA_COD_STR'] = df['COD_NOTA_VISITA'].apply(limpa_nota_codigo) if 'COD_NOTA_VISITA' in df.columns else ""
                 df['STATUS_VISITA_STR'] = df['IND_STATUS_VISITA'].astype(str).str.strip() if 'IND_STATUS_VISITA' in df.columns else ""
 
-                # Flag de Impedimento
                 is_impedimento = df['STATUS_VISITA_STR'] == 'Impedimento de Leitura'
                 df['IMP_FAM_1'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('1')
                 df['IMP_FAM_2'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('2')
 
-                # Padronização de Colunas Categóricas
+                # Preenchimento de colunas categóricas para evitar que fiquem NaN
                 colunas_texto = [
                     'NOM_BASE_OPERACIONAL', 'NOM_MUNICIPIO', 'LOTE', 
                     'LOCALIZACAO', 'NOM_UNIDADE_LEITURA', 'IND_TIPO', 
@@ -116,35 +112,35 @@ if uploaded_files:
                 ]
                 for col in colunas_texto:
                     if col in df.columns:
-                        df[col] = df[col].replace({'nan': 'N/A', '': 'N/A', 'None': 'N/A'})
+                        df[col] = df[col].fillna('N/A').replace({'nan': 'N/A', '': 'N/A', 'None': 'N/A'})
                     else:
                         df[col] = 'N/A'
 
                 # Barra Lateral - Filtros
                 st.sidebar.header("🎯 Filtros")
 
-                bases_disp = sorted([x for x in df['NOM_BASE_OPERACIONAL'].unique() if x != 'N/A'])
+                bases_disp = sorted([x for x in df['NOM_BASE_OPERACIONAL'].unique()])
                 filtro_base = st.sidebar.multiselect("Base Operacional", options=bases_disp, default=bases_disp)
 
-                municipios_disp = sorted([x for x in df['NOM_MUNICIPIO'].unique() if x != 'N/A'])
+                municipios_disp = sorted([x for x in df['NOM_MUNICIPIO'].unique()])
                 filtro_municipio = st.sidebar.multiselect("Município", options=municipios_disp, default=municipios_disp)
 
-                lotes_disp = sorted([x for x in df['LOTE'].unique() if x != 'N/A'])
+                lotes_disp = sorted([x for x in df['LOTE'].unique()])
                 filtro_lote = st.sidebar.multiselect("Lote", options=lotes_disp, default=lotes_disp)
 
-                localizacao_disp = sorted([x for x in df['LOCALIZACAO'].unique() if x != 'N/A'])
+                localizacao_disp = sorted([x for x in df['LOCALIZACAO'].unique()])
                 filtro_localizacao = st.sidebar.multiselect("Localização", options=localizacao_disp, default=localizacao_disp)
 
-                unidades_disp = sorted([x for x in df['NOM_UNIDADE_LEITURA'].unique() if x != 'N/A'])
+                unidades_disp = sorted([x for x in df['NOM_UNIDADE_LEITURA'].unique()])
                 filtro_unidade = st.sidebar.multiselect("Unidade de Leitura", options=unidades_disp, default=unidades_disp)
 
-                agentes_disp = sorted([x for x in df['AGENTE'].unique() if x != 'N/A'])
+                agentes_disp = sorted([x for x in df['AGENTE'].unique()])
                 filtro_agente = st.sidebar.multiselect("Agente", options=agentes_disp, default=agentes_disp)
 
-                tipo_disp = sorted([x for x in df['IND_TIPO'].unique() if x != 'N/A'])
+                tipo_disp = sorted([x for x in df['IND_TIPO'].unique()])
                 filtro_tipo = st.sidebar.multiselect("Tipo de Leitura (IND_TIPO)", options=tipo_disp, default=tipo_disp)
 
-                datas_disp = sorted([x for x in df['DATA_LEITURA'].unique() if x != 'N/A'])
+                datas_disp = sorted([x for x in df['DATA_LEITURA'].unique()])
                 filtro_data = st.sidebar.multiselect("Data da Leitura", options=datas_disp, default=datas_disp)
 
                 # Aplicação dos Filtros
@@ -162,7 +158,7 @@ if uploaded_files:
                 if df_filtrado.empty:
                     st.warning("Nenhum registro encontrado com os filtros selecionados.")
                 else:
-                    # Métricas
+                    # Métricas Principais
                     total_geral = len(df_filtrado)
                     imp_fam1 = int(df_filtrado['IMP_FAM_1'].sum())
                     imp_fam2 = int(df_filtrado['IMP_FAM_2'].sum())
@@ -186,7 +182,7 @@ if uploaded_files:
                         valid = series.dropna()
                         return valid.max().strftime('%H:%M') if not valid.empty else "N/A"
 
-                    # Agrupamento final
+                    # ⚠️ AGRUPAMENTO COM dropna=False PARA NÃO PERDER LINHAS NULAS
                     df_resumo = df_filtrado.groupby([
                         'DATA_LEITURA',
                         'DATA_PREVISTA_STR',
@@ -198,7 +194,7 @@ if uploaded_files:
                         'IND_TIPO',
                         'COD_AGENTE',
                         'AGENTE'
-                    ]).agg(
+                    ], dropna=False).agg(
                         TOTAL_LEITURAS=('DT_INI_DT', 'count'),
                         HORARIO_INICIAL=('DT_INI_DT', min_hora),
                         HORARIO_FINAL=('DT_INI_DT', max_hora),
