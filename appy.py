@@ -49,7 +49,7 @@ if uploaded_files:
                 df = df_raw.copy()
 
             if df.empty:
-                st.warning("⚠️ Nenhum registro de 'Leitura' encontrado no arquivo enviado. Verifique se a coluna TIPO_ATIVIDADE contém o valor 'Leitura'.")
+                st.warning("⚠️ Nenhum registro de 'Leitura' encontrado no arquivo enviado.")
             else:
                 # 2. Tratamento de Datas e Horários (DT_INI_ACAO)
                 df['DT_INI_DT'] = pd.to_datetime(df['DT_INI_ACAO'], dayfirst=True, errors='coerce')
@@ -80,7 +80,7 @@ if uploaded_files:
                 df['IMP_FAM_1'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('1')
                 df['IMP_FAM_2'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('2')
 
-                # Padronização das colunas categóricas para evitar erros
+                # Padronização das colunas
                 colunas_texto = [
                     'NOM_BASE_OPERACIONAL', 'NOM_MUNICIPIO', 'LOTE', 
                     'LOCALIZACAO', 'NOM_UNIDADE_LEITURA', 'IND_TIPO', 
@@ -92,7 +92,7 @@ if uploaded_files:
                     else:
                         df[col] = 'N/A'
 
-                # Barra Lateral - Filtros Interativos
+                # Barra Lateral - Filtros
                 st.sidebar.header("🎯 Filtros")
 
                 bases_disp = sorted([x for x in df['NOM_BASE_OPERACIONAL'].unique() if x != 'N/A'])
@@ -134,13 +134,20 @@ if uploaded_files:
                 if df_filtrado.empty:
                     st.warning("Nenhum registro encontrado com os filtros selecionados.")
                 else:
-                    # Métricas Rápidas
+                    # Cálculo dos Totais das Métricas
+                    total_geral = len(df_filtrado)
+                    imp_fam1 = int(df_filtrado['IMP_FAM_1'].sum())
+                    imp_fam2 = int(df_filtrado['IMP_FAM_2'].sum())
+                    total_impedimentos = imp_fam1 + imp_fam2
+                    leituras_sem_imp = total_geral - total_impedimentos
+
+                    # Cards de Métricas
                     c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Total de Leituras", len(df_filtrado))
-                    c2.metric("Agentes Ativos", df_filtrado['AGENTE'].nunique())
-                    c3.metric("Imp. Família 1", int(df_filtrado['IMP_FAM_1'].sum()))
-                    c4.metric("Imp. Família 2", int(df_filtrado['IMP_FAM_2'].sum()))
-                    c5.metric("Unid. de Leitura", df_filtrado['NOM_UNIDADE_LEITURA'].nunique())
+                    c1.metric("Total de Leituras", total_geral)
+                    c2.metric("Leituras sem Impedimento", leituras_sem_imp)
+                    c3.metric("Imp. Família 1", imp_fam1)
+                    c4.metric("Imp. Família 2", imp_fam2)
+                    c5.metric("Agentes Ativos", df_filtrado['AGENTE'].nunique())
 
                     st.markdown("---")
 
@@ -153,7 +160,7 @@ if uploaded_files:
                         valid = series.dropna()
                         return valid.max().strftime('%H:%M') if not valid.empty else "N/A"
 
-                    # 5. Agrupamento Detalhado Conforme Solicitado
+                    # 5. Agrupamento Detalhado
                     df_resumo = df_filtrado.groupby([
                         'DATA_LEITURA',
                         'DATA_PREVISTA_STR',
@@ -173,6 +180,31 @@ if uploaded_files:
                         IMPEDIMENTOS_FAM_2=('IMP_FAM_2', 'sum')
                     ).reset_index()
 
+                    # Cálculo da nova coluna: Leituras sem Impedimento
+                    df_resumo['LEITURAS_SEM_IMPEDIMENTO'] = df_resumo['TOTAL_LEITURAS'] - (
+                        df_resumo['IMPEDIMENTOS_FAM_1'] + df_resumo['IMPEDIMENTOS_FAM_2']
+                    )
+
+                    # Reorganizando a ordem das colunas para apresentação e exportação
+                    df_resumo = df_resumo[[
+                        'DATA_LEITURA',
+                        'DATA_PREVISTA_STR',
+                        'NOM_BASE_OPERACIONAL',
+                        'NOM_MUNICIPIO',
+                        'LOTE',
+                        'LOCALIZACAO',
+                        'NOM_UNIDADE_LEITURA',
+                        'IND_TIPO',
+                        'COD_AGENTE',
+                        'AGENTE',
+                        'TOTAL_LEITURAS',
+                        'LEITURAS_SEM_IMPEDIMENTO',
+                        'HORARIO_INICIAL',
+                        'HORARIO_FINAL',
+                        'IMPEDIMENTOS_FAM_1',
+                        'IMPEDIMENTOS_FAM_2'
+                    ]]
+
                     df_resumo.columns = [
                         'Data Realização',
                         'Data Prevista',
@@ -185,13 +217,14 @@ if uploaded_files:
                         'Código Agente',
                         'Nome Agente',
                         'Total de Leituras',
+                        'Leituras sem Impedimento',
                         '1ª Leitura (Início)',
                         'Última Leitura (Fim)',
                         'Impedimento Família 1',
                         'Impedimento Família 2'
                     ]
 
-                    # Visualizações em Gráficos
+                    # Gráficos
                     col_g1, col_g2 = st.columns(2)
 
                     with col_g1:
@@ -208,7 +241,7 @@ if uploaded_files:
                         st.plotly_chart(fig_imp, use_container_width=True)
 
                     st.markdown("---")
-                    st.subheader("📋 Tabela Resumo da Produção por Agente, Lote e Unidade de Leitura")
+                    st.subheader("📋 Tabela Resumo da Produção")
                     st.dataframe(df_resumo, use_container_width=True)
 
                     # Exportação para Excel
