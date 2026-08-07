@@ -3,8 +3,8 @@ import pandas as pd
 import plotly.express as px
 import io
 
-st.set_page_config(page_title="Painel Operacional de Leituras", layout="wide")
-st.title("📊 Painel de Controle de Leituras, Lotes e Impedimentos")
+st.set_page_config(page_title="Painel de Qualidade e Produção de Leituras", layout="wide")
+st.title("📊 Painel de Controle de Produção e Faixas de Leitura")
 st.markdown("---")
 
 uploaded_files = st.file_uploader(
@@ -20,8 +20,7 @@ if uploaded_files:
         for file in uploaded_files:
             df_temp = None
             if file.name.endswith('.csv'):
-                # Tenta diferentes delimitadores e codificações
-                for sep in [';', ',', '\t']:
+                for sep in [',', ';', '\t']:
                     for enc in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
                         try:
                             file.seek(0)
@@ -41,134 +40,86 @@ if uploaded_files:
         if lista_dfs:
             df_raw = pd.concat(lista_dfs, ignore_index=True)
 
-            # 1. REMOÇÃO DE CARACTERES INVISÍVEIS (\xa0) NOS CABEÇALHOS
+            # 1. TRATAMENTO DE NOMES DE COLUNAS (Espaços ocultos, Enter, \xa0)
             df_raw.columns = (
                 df_raw.columns.astype(str)
                 .str.replace('\xa0', ' ', regex=False)
                 .str.replace(r'[\r\n]+', ' ', regex=True)
                 .str.replace(r'\s+', ' ', regex=True)
                 .str.strip()
-                .str.upper() # Padroniza para maiúsculas
             )
 
-            # 2. HIGIENIZAÇÃO DE TODAS AS CÉLULAS DE TEXTO
+            # 2. TRATAMENTO DE TEXTOS EM TODAS AS CÉLULAS
             for col in df_raw.columns:
                 if df_raw[col].dtype == 'object':
                     df_raw[col] = (
                         df_raw[col]
                         .fillna('N/A')
                         .astype(str)
-                        .str.replace('\xa0', ' ', regex=False) # Limpa espaço invisível do Excel
+                        .str.replace('\xa0', ' ', regex=False)
                         .str.replace(r'[\r\n]+', ' ', regex=True)
                         .str.replace(r'\s+', ' ', regex=True)
                         .str.strip()
                     )
                     df_raw[col] = df_raw[col].replace({'nan': 'N/A', 'None': 'N/A', '<NA>': 'N/A', '': 'N/A'})
 
-            # Função auxiliar para localizar colunas de forma flexível
-            def buscar_coluna(termos_busca, colunas_df):
-                for termo in termos_busca:
-                    for col in colunas_df:
-                        if termo.upper() in col.upper():
-                            return col
-                return None
-
-            col_tipo_atv = buscar_coluna(['TIPO_ATIVIDADE', 'TIPO ATIVIDADE', 'ATIVIDADE'], df_raw.columns)
-            col_dt_ini = buscar_coluna(['DT_INI_ACAO', 'DATA_INICIO', 'DT_INICIO', 'DATA_LEITURA'], df_raw.columns)
-            col_dt_prev = buscar_coluna(['DAT_PREVISTA', 'DATA_PREVISTA', 'DT_PREVISTA'], df_raw.columns)
-            col_agente = buscar_coluna(['AGENTE', 'NOME_AGENTE', 'NOM_AGENTE'], df_raw.columns)
-            col_cod_agente = buscar_coluna(['COD_AGENTE', 'CODIGO_AGENTE'], df_raw.columns)
-            col_status = buscar_coluna(['IND_STATUS_VISITA', 'STATUS_VISITA', 'STATUS'], df_raw.columns)
-            col_nota = buscar_coluna(['COD_NOTA_VISITA', 'NOTA_VISITA', 'COD_NOTA'], df_raw.columns)
-
-            # 🔍 PAINEL DE DIAGNÓSTICO E INSPEÇÃO (Para identificar qualquer erro no ficheiro)
-            with st.expander("🔍 **Clique aqui para ver a Inspeção de Diagnóstico dos Ficheiros**", expanded=False):
-                st.write("**Linhas brutas lidas:**", len(df_raw))
-                st.write("**Colunas detetadas no ficheiro:**", list(df_raw.columns))
-                st.write("**Mapeamento de Colunas:**", {
-                    'TIPO_ATIVIDADE': col_tipo_atv,
-                    'DT_INI_ACAO': col_dt_ini,
-                    'AGENTE': col_agente,
-                    'STATUS_VISITA': col_status
-                })
-                if col_tipo_atv:
-                    st.write("**Valores únicos na coluna TIPO_ATIVIDADE:**", df_raw[col_tipo_atv].value_counts().to_dict())
-                st.write("**Amostra dos Dados:**")
-                st.dataframe(df_raw.head(5))
-
             total_linhas_brutas = len(df_raw)
 
             # 3. FILTRAGEM DE LEITURAS
-            if col_tipo_atv:
-                mask_leitura = df_raw[col_tipo_atv].str.lower().str.contains('leitura', na=False)
+            if 'TIPO_ATIVIDADE' in df_raw.columns:
+                mask_leitura = df_raw['TIPO_ATIVIDADE'].astype(str).str.lower().str.contains('leitura', na=False)
                 df = df_raw[mask_leitura].copy()
             else:
                 df = df_raw.copy()
 
             total_linhas_processadas = len(df)
-            descartadas = total_linhas_brutas - total_linhas_processadas
-
-            st.info(
-                f"ℹ️ **Diagnóstico de Carga:** "
-                f"Foram identificadas **{total_linhas_brutas} linhas**. "
-                f"**{total_linhas_processadas} leituras** foram processadas "
-                f"({descartadas} registos de sistema desconsiderados)."
-            )
+            st.info(f"ℹ️ **Carga de Dados:** {total_linhas_brutas} linhas carregadas | {total_linhas_processadas} leituras processadas.")
 
             if df.empty:
-                st.warning("⚠️ Nenhum registo contendo 'Leitura' foi localizado. Verifique o painel de inspeção acima.")
+                st.warning("⚠️ Nenhum registro contendo 'Leitura' foi localizado.")
             else:
-                # 4. TRATAMENTO DE DATAS
-                if col_dt_ini:
-                    df['DT_INI_DT'] = pd.to_datetime(df[col_dt_ini], dayfirst=True, errors='coerce')
+                # 4. TRATAMENTO DE DATAS E HORÁRIOS
+                if 'DT_INI_ACAO' in df.columns:
+                    df['DT_INI_DT'] = pd.to_datetime(df['DT_INI_ACAO'], errors='coerce')
                     df['DATA_LEITURA'] = df['DT_INI_DT'].dt.strftime('%d/%m/%Y').fillna('Sem Data')
                 else:
                     df['DT_INI_DT'] = pd.NaT
                     df['DATA_LEITURA'] = 'Sem Data'
 
-                if col_dt_prev:
-                    df['DAT_PREVISTA_DT'] = pd.to_datetime(df[col_dt_prev], dayfirst=True, errors='coerce')
-                    df['DATA_PREVISTA_STR'] = df['DAT_PREVISTA_DT'].dt.strftime('%d/%m/%Y').fillna(df[col_dt_prev].astype(str))
+                if 'DAT_PREVISTA' in df.columns:
+                    df['DAT_PREVISTA_DT'] = pd.to_datetime(df['DAT_PREVISTA'], errors='coerce')
+                    df['DATA_PREVISTA_STR'] = df['DAT_PREVISTA_DT'].dt.strftime('%d/%m/%Y').fillna(df['DAT_PREVISTA'].astype(str))
                 else:
                     df['DATA_PREVISTA_STR'] = 'Não Informada'
 
-                # 5. TRATAMENTO DE IMPEDIMENTOS
-                def limpa_nota(val):
-                    if pd.isna(val) or str(val).strip() in ['nan', 'None', '', 'N/A']:
-                        return ""
-                    s = str(val).strip()
-                    return s[:-2] if s.endswith('.0') else s
+                # 5. CLASSIFICAÇÃO DAS FAIXAS DE LEITURA (VERDE, AMARELA, VERMELHA)
+                status_str = df['IND_STATUS_VISITA'].astype(str) if 'IND_STATUS_VISITA' in df.columns else st.Series([""] * len(df))
+                
+                df['FAIXA_VERDE'] = status_str.str.contains('verde', case=False, na=False)
+                df['FAIXA_AMARELA'] = status_str.str.contains('amarela', case=False, na=False)
+                df['FAIXA_VERMELHA'] = status_str.str.contains('vermelha', case=False, na=False)
 
-                df['NOTA_COD_STR'] = df[col_nota].apply(limpa_nota) if col_nota else ""
-                df['STATUS_VISITA_STR'] = df[col_status].astype(str).str.strip() if col_status else ""
+                # Garantia de presença de QTD_FOTO
+                if 'QTD_FOTO' in df.columns:
+                    df['QTD_FOTO_NUM'] = pd.to_numeric(df['QTD_FOTO'], errors='coerce').fillna(0).astype(int)
+                else:
+                    df['QTD_FOTO_NUM'] = 0
 
-                is_impedimento = df['STATUS_VISITA_STR'].str.lower() == 'impedimento de leitura'
-                df['IMP_FAM_1'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('1')
-                df['IMP_FAM_2'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('2')
+                # Colunas de Agrupamento Essenciais
+                colunas_chave = [
+                    'NOM_BASE_OPERACIONAL', 'NOM_MUNICIPIO', 'LOTE', 
+                    'LOCALIZACAO', 'NOM_UNIDADE_LEITURA', 'IND_TIPO', 
+                    'COD_AGENTE', 'AGENTE'
+                ]
+                for col in colunas_chave:
+                    if col not in df.columns:
+                        df[col] = 'N/A'
 
-                # Garantia de colunas essenciais
-                colunas_mapeadas = {
-                    'NOM_BASE_OPERACIONAL': buscar_coluna(['NOM_BASE_OPERACIONAL', 'BASE'], df.columns),
-                    'NOM_MUNICIPIO': buscar_coluna(['NOM_MUNICIPIO', 'MUNICIPIO'], df.columns),
-                    'LOTE': buscar_coluna(['LOTE'], df.columns),
-                    'LOCALIZACAO': buscar_coluna(['LOCALIZACAO'], df.columns),
-                    'NOM_UNIDADE_LEITURA': buscar_coluna(['NOM_UNIDADE_LEITURA', 'UNIDADE_LEITURA'], df.columns),
-                    'IND_TIPO': buscar_coluna(['IND_TIPO', 'TIPO_LEITURA'], df.columns),
-                    'COD_AGENTE': col_cod_agente if col_cod_agente else 'N/A',
-                    'AGENTE': col_agente if col_agente else 'N/A'
-                }
-
-                for col_std, col_orig in colunas_mapeadas.items():
-                    if col_orig and col_orig in df.columns:
-                        df[col_std] = df[col_orig]
-                    else:
-                        df[col_std] = 'N/A'
-
-                # 6. FILTROS NA SIDEBAR
+                # 6. FILTROS NA BARRA LATERAL (SIDEBAR)
                 st.sidebar.header("🎯 Filtros")
 
-                def criar_multiselect(label, col):
-                    opcoes = sorted([x for x in df[col].unique() if str(x) != 'nan'])
+                def criar_multiselect(label, col_name):
+                    opcoes = sorted([x for x in df[col_name].unique() if str(x) != 'nan'])
                     return st.sidebar.multiselect(label, options=opcoes, default=opcoes)
 
                 f_base = criar_multiselect("Base Operacional", 'NOM_BASE_OPERACIONAL')
@@ -177,9 +128,10 @@ if uploaded_files:
                 f_loc = criar_multiselect("Localização", 'LOCALIZACAO')
                 f_unid = criar_multiselect("Unidade de Leitura", 'NOM_UNIDADE_LEITURA')
                 f_agente = criar_multiselect("Agente", 'AGENTE')
-                f_tipo = criar_multiselect("Tipo de Leitura", 'IND_TIPO')
+                f_tipo = criar_multiselect("Tipo de Leitura (P/R)", 'IND_TIPO')
                 f_data = criar_multiselect("Data da Leitura", 'DATA_LEITURA')
 
+                # Aplicando os filtros
                 df_filtrado = df[
                     (df['NOM_BASE_OPERACIONAL'].isin(f_base)) &
                     (df['NOM_MUNICIPIO'].isin(f_mun)) &
@@ -192,97 +144,96 @@ if uploaded_files:
                 ]
 
                 if df_filtrado.empty:
-                    st.warning("⚠️ Nenhum registo encontrado com os filtros selecionados.")
+                    st.warning("⚠️ Nenhum registro encontrado com os filtros selecionados.")
                 else:
-                    # 7. MÉTRICAS
-                    total_geral = len(df_filtrado)
-                    imp_fam1 = int(df_filtrado['IMP_FAM_1'].sum())
-                    imp_fam2 = int(df_filtrado['IMP_FAM_2'].sum())
-                    leituras_sem_imp = total_geral - (imp_fam1 + imp_fam2)
+                    # 7. CARDS DE MÉTRICAS PRINCIPAIS
+                    tot_leituras = len(df_filtrado)
+                    tot_verde = int(df_filtrado['FAIXA_VERDE'].sum())
+                    tot_amarela = int(df_filtrado['FAIXA_AMARELA'].sum())
+                    tot_vermelha = int(df_filtrado['FAIXA_VERMELHA'].sum())
+                    tot_fotos = int(df_filtrado['QTD_FOTO_NUM'].sum())
 
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Total de Leituras", total_geral)
-                    c2.metric("Sem Impedimento", leituras_sem_imp)
-                    c3.metric("Imp. Família 1", imp_fam1)
-                    c4.metric("Imp. Família 2", imp_fam2)
-                    c5.metric("Agentes Ativos", df_filtrado['AGENTE'].nunique())
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Total de Leituras", tot_leituras)
+                    m2.metric("🟢 Faixa Verde", tot_verde)
+                    m3.metric("🟡 Faixa Amarela", tot_amarela)
+                    m4.metric("🔴 Faixa Vermelha", tot_vermelha)
+                    m5.metric("📸 Total de Fotos", tot_fotos)
 
                     st.markdown("---")
 
                     def min_hora(series):
-                        v = series.dropna()
-                        return v.min().strftime('%H:%M') if not v.empty else "N/A"
+                        valid = series.dropna()
+                        return valid.min().strftime('%H:%M') if not valid.empty else "N/A"
 
                     def max_hora(series):
-                        v = series.dropna()
-                        return v.max().strftime('%H:%M') if not v.empty else "N/A"
+                        valid = series.dropna()
+                        return valid.max().strftime('%H:%M') if not valid.empty else "N/A"
 
-                    # 8. TABELA RESUMO (dropna=False)
+                    # 8. TABELA RESUMO DA PRODUÇÃO
                     df_resumo = df_filtrado.groupby([
                         'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
                         'NOM_MUNICIPIO', 'LOTE', 'LOCALIZACAO', 'NOM_UNIDADE_LEITURA',
                         'IND_TIPO', 'COD_AGENTE', 'AGENTE'
                     ], dropna=False).agg(
                         TOTAL_LEITURAS=('AGENTE', 'count'),
+                        FAIXA_VERDE=('FAIXA_VERDE', 'sum'),
+                        FAIXA_AMARELA=('FAIXA_AMARELA', 'sum'),
+                        FAIXA_VERMELHA=('FAIXA_VERMELHA', 'sum'),
+                        TOTAL_FOTOS=('QTD_FOTO_NUM', 'sum'),
                         HORARIO_INICIAL=('DT_INI_DT', min_hora),
-                        HORARIO_FINAL=('DT_INI_DT', max_hora),
-                        IMPEDIMENTOS_FAM_1=('IMP_FAM_1', 'sum'),
-                        IMPEDIMENTOS_FAM_2=('IMP_FAM_2', 'sum')
+                        HORARIO_FINAL=('DT_INI_DT', max_hora)
                     ).reset_index()
-
-                    df_resumo['LEITURAS_SEM_IMPEDIMENTO'] = df_resumo['TOTAL_LEITURAS'] - (
-                        df_resumo['IMPEDIMENTOS_FAM_1'] + df_resumo['IMPEDIMENTOS_FAM_2']
-                    )
-
-                    df_resumo = df_resumo[[
-                        'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
-                        'NOM_MUNICIPIO', 'LOTE', 'LOCALIZACAO', 'NOM_UNIDADE_LEITURA',
-                        'IND_TIPO', 'COD_AGENTE', 'AGENTE', 'TOTAL_LEITURAS',
-                        'LEITURAS_SEM_IMPEDIMENTO', 'HORARIO_INICIAL', 'HORARIO_FINAL',
-                        'IMPEDIMENTOS_FAM_1', 'IMPEDIMENTOS_FAM_2'
-                    ]]
 
                     df_resumo.columns = [
                         'Data Realização', 'Data Prevista', 'Base Operacional',
                         'Município', 'Lote', 'Localização', 'Unidade de Leitura',
                         'Tipo (Passe/Repasse)', 'Código Agente', 'Nome Agente',
-                        'Total de Leituras', 'Leituras sem Impedimento',
-                        '1ª Leitura (Início)', 'Última Leitura (Fim)',
-                        'Impedimento Família 1', 'Impedimento Família 2'
+                        'Total de Leituras', '🟢 Faixa Verde', '🟡 Faixa Amarela',
+                        '🔴 Faixa Vermelha', 'Total Fotos', '1ª Leitura (Início)',
+                        'Última Leitura (Fim)'
                     ]
 
-                    # 9. GRÁFICOS
+                    # 9. GRÁFICOS VISUAIS
                     col_g1, col_g2 = st.columns(2)
+
                     with col_g1:
-                        st.subheader("🏙️ Leituras por Município")
-                        df_mun = df_filtrado.groupby('NOM_MUNICIPIO').size().reset_index(name='Qtd Leituras')
-                        fig_mun = px.bar(df_mun, x='NOM_MUNICIPIO', y='Qtd Leituras', text_auto=True)
-                        st.plotly_chart(fig_mun, use_container_width=True)
+                        st.subheader("📊 Produção por Agente")
+                        df_agente_graf = df_filtrado.groupby('AGENTE').size().reset_index(name='Qtd Leituras')
+                        fig_agente = px.bar(df_agente_graf, x='AGENTE', y='Qtd Leituras', text_auto=True, color_discrete_sequence=['#2ca02c'])
+                        st.plotly_chart(fig_agente, use_container_width=True)
 
                     with col_g2:
-                        st.subheader("⚠️ Impedimentos por Agente")
-                        df_imp = df_filtrado.groupby('AGENTE')[['IMP_FAM_1', 'IMP_FAM_2']].sum().reset_index()
-                        df_imp.columns = ['Agente', 'Família 1', 'Família 2']
-                        fig_imp = px.bar(df_imp, x='Agente', y=['Família 1', 'Família 2'], barmode='group', text_auto=True)
-                        st.plotly_chart(fig_imp, use_container_width=True)
+                        st.subheader("🎨 Distribuição das Faixas de Leitura")
+                        df_faixas = pd.DataFrame({
+                            'Faixa': ['Verde', 'Amarela', 'Vermelha'],
+                            'Quantidade': [tot_verde, tot_amarela, tot_vermelha]
+                        })
+                        fig_faixas = px.pie(
+                            df_faixas, names='Faixa', values='Quantidade',
+                            color='Faixa',
+                            color_discrete_map={'Verde': '#2ca02c', 'Amarela': '#ff7f0e', 'Vermelha': '#d62728'},
+                            hole=0.4
+                        )
+                        st.plotly_chart(fig_faixas, use_container_width=True)
 
                     st.markdown("---")
-                    st.subheader("📋 Tabela Resumo da Produção")
+                    st.subheader("📋 Tabela Resumo Tratada")
                     st.dataframe(df_resumo, use_container_width=True)
 
                     # Exportação Excel
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                        df_resumo.to_excel(writer, index=False, sheet_name='Resumo Leituras')
+                        df_resumo.to_excel(writer, index=False, sheet_name='Resumo Producao Leituras')
 
                     st.download_button(
                         label="📥 Baixar Planilha Tratada (Excel)",
                         data=buffer.getvalue(),
-                        file_name="resumo_leituras_tratado.xlsx",
+                        file_name="resumo_producao_faixas_leituras.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
     except Exception as e:
-        st.error(f"Erro ao processar ficheiros: {e}")
+        st.error(f"Ocorreu um erro ao processar os arquivos: {e}")
 else:
-    st.info("👆 Faça o upload da planilha para iniciar.")
+    st.info("👆 Por favor, envie uma ou mais planilhas para iniciar a análise.")
