@@ -4,7 +4,7 @@ import plotly.express as px
 import io
 
 st.set_page_config(page_title="Painel de Performance - Alta Carga", layout="wide")
-st.title("⚡ Painel Operacional (Suporte a Latin1/CP1252 - 500k+ Linhas)")
+st.title("⚡ Painel Operacional (Com Cálculo de Leituras Limpas)")
 st.markdown("---")
 
 uploaded_files = st.file_uploader(
@@ -20,7 +20,6 @@ if uploaded_files:
         for file in uploaded_files:
             df_temp = None
             if file.name.lower().endswith('.csv'):
-                # Prioriza as codificações brasileiras padrão (Latin1, CP1252) antes do UTF-8
                 for enc in ['latin1', 'cp1252', 'iso-8859-1', 'utf-8-sig', 'utf-8']:
                     for sep in [';', ',', '\t']:
                         try:
@@ -89,17 +88,14 @@ if uploaded_files:
                     s_str = df[col_name].astype(str).str.strip()
                     dt_series = pd.Series(pd.NaT, index=df.index)
 
-                    # Passo A: Formatos ISO (YYYY-MM-DD)
                     mask_iso = s_str.str.match(r'^\d{4}-\d{2}-\d{2}')
                     if mask_iso.any():
                         dt_series[mask_iso] = pd.to_datetime(s_str[mask_iso], errors='coerce')
 
-                    # Passo B: Formatos BR (DD/MM/YYYY)
                     mask_br = s_str.str.match(r'^\d{2}/\d{2}/\d{4}')
                     if mask_br.any():
                         dt_series[mask_br] = pd.to_datetime(s_str[mask_br], dayfirst=True, errors='coerce')
 
-                    # Passo C: Fallback para formatos restantes
                     mask_restante = dt_series.isna() & (s_str != 'nan') & (s_str != 'N/A')
                     if mask_restante.any():
                         dt_series[mask_restante] = pd.to_datetime(s_str[mask_restante], errors='coerce', format='mixed')
@@ -110,7 +106,7 @@ if uploaded_files:
                 df['DATA_LEITURA'], df['DT_INI_DT'] = converter_data_inteligente(col_dt_ini)
                 df['DATA_PREVISTA_STR'], _ = converter_data_inteligente(col_dt_prev)
 
-                # 4. CLASSIFICAÇÃO DE IMPEDIMENTOS
+                # 4. CLASSIFICAÇÃO DE IMPEDIMENTOS E CÁLCULO DE LEITURAS LIMPAS
                 def limpa_serie_nota(col_name):
                     if not col_name or col_name not in df.columns:
                         return pd.Series([''] * len(df))
@@ -122,6 +118,11 @@ if uploaded_files:
 
                 df['IMP_GRUPO_1'] = (s_vis.str.startswith('1') | s_rev.str.startswith('1') | s_ger.str.startswith('1')).astype('int8')
                 df['IMP_GRUPO_2'] = (s_vis.str.startswith('2') | s_rev.str.startswith('2') | s_ger.str.startswith('2')).astype('int8')
+
+                # Marcação de Impedimento Total (linha a linha)
+                df['TEM_IMPEDIMENTO'] = ((df['IMP_GRUPO_1'] == 1) | (df['IMP_GRUPO_2'] == 1)).astype('int8')
+                # Marcação de Leitura Limpa (1 = Sem impedimento, 0 = Com impedimento)
+                df['LEITURA_LIMPA'] = (df['TEM_IMPEDIMENTO'] == 0).astype('int8')
 
                 if col_foto and col_foto in df.columns:
                     df['QTD_FOTO_NUM'] = pd.to_numeric(df[col_foto], errors='coerce').fillna(0).astype('int32')
@@ -170,12 +171,15 @@ if uploaded_files:
             if df_filtrado.empty:
                 st.warning("⚠️ Nenhum registro encontrado para os filtros selecionados.")
             else:
-                # 6. MÉTRICAS CONSOLIDADAS
+                # 6. MÉTRICAS CONSOLIDADAS (SUBTRAÇÃO EXPLÍCITA)
                 tot_leituras = len(df_filtrado)
                 tot_g1 = int(df_filtrado['IMP_GRUPO_1'].sum())
                 tot_g2 = int(df_filtrado['IMP_GRUPO_2'].sum())
-                tot_impedimentos = tot_g1 + tot_g2
+                tot_impedimentos = int(df_filtrado['TEM_IMPEDIMENTO'].sum())
+                
+                # CÁLCULO DIRETO: TOTAL - IMPEDIMENTOS
                 leituras_limpas = tot_leituras - tot_impedimentos
+                pct_limpas = (leituras_limpas / tot_leituras * 100) if tot_leituras > 0 else 0
                 tot_fotos = int(df_filtrado['QTD_FOTO_NUM'].sum())
 
                 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -183,7 +187,7 @@ if uploaded_files:
                 c2.metric("Imp. Grupo 1", f"{tot_g1:,}".replace(",", "."))
                 c3.metric("Imp. Grupo 2", f"{tot_g2:,}".replace(",", "."))
                 c4.metric("Total Impedimentos", f"{tot_impedimentos:,}".replace(",", "."))
-                c5.metric("✅ Leituras Limpas", f"{leituras_limpas:,}".replace(",", "."))
+                c5.metric("✅ Leituras Limpas", f"{leituras_limpas:,}".replace(",", "."), delta=f"{pct_limpas:.1f}% limpas")
                 c6.metric("📸 Total Fotos", f"{tot_fotos:,}".replace(",", "."))
 
                 st.markdown("---")
@@ -194,7 +198,7 @@ if uploaded_files:
                     res = v.min() if tipo == 'min' else v.max()
                     return res.strftime('%H:%M') if pd.notna(res) else "N/A"
 
-                # 7. TABELA RESUMO (GROUPBY ULTRARRÁPIDO)
+                # 7. TABELA RESUMO (GROUPBY ULTRARRÁPIDO COM SUBTRAÇÃO)
                 df_resumo = df_filtrado.groupby([
                     'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
                     'NOM_MUNICIPIO', 'LOTE', 'COD_AGENTE_STD', 'AGENTE_STD'
@@ -202,29 +206,35 @@ if uploaded_files:
                     TOTAL_LEITURAS=('AGENTE_STD', 'count'),
                     IMP_GRUPO_1=('IMP_GRUPO_1', 'sum'),
                     IMP_GRUPO_2=('IMP_GRUPO_2', 'sum'),
+                    TOTAL_IMPEDIMENTOS=('TEM_IMPEDIMENTO', 'sum'),
+                    LEITURAS_LIMPAS=('LEITURA_LIMPA', 'sum'),
                     TOTAL_FOTOS=('QTD_FOTO_NUM', 'sum'),
                     HORA_INI=('DT_INI_DT', lambda x: hora_min_max(x, 'min')),
                     HORA_FIM=('DT_INI_DT', lambda x: hora_min_max(x, 'max'))
                 )
 
-                df_resumo['TOTAL_IMPEDIMENTOS'] = df_resumo['IMP_GRUPO_1'] + df_resumo['IMP_GRUPO_2']
-                df_resumo['LEITURAS_LIMPAS'] = df_resumo['TOTAL_LEITURAS'] - df_resumo['TOTAL_IMPEDIMENTOS']
+                # Organizando colunas na ordem exata
+                df_resumo_final = df_resumo[[
+                    'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
+                    'NOM_MUNICIPIO', 'LOTE', 'COD_AGENTE_STD', 'AGENTE_STD',
+                    'TOTAL_LEITURAS', 'IMP_GRUPO_1', 'IMP_GRUPO_2', 'TOTAL_IMPEDIMENTOS',
+                    'LEITURAS_LIMPAS', 'TOTAL_FOTOS', 'HORA_INI', 'HORA_FIM'
+                ]]
 
-                df_resumo.columns = [
+                df_resumo_final.columns = [
                     'Data Realização', 'Data Prevista', 'Base Operacional',
                     'Município', 'Lote', 'Código Agente', 'Nome Agente',
-                    'Total Leituras', 'Imp. Grupo 1', 'Imp. Grupo 2',
-                    'Total Fotos', '1ª Leitura', 'Última Leitura',
-                    'Total Impedimentos', '✅ Leituras Limpas'
+                    'Total Leituras', 'Imp. Grupo 1', 'Imp. Grupo 2', 'Total Impedimentos',
+                    '✅ Leituras Limpas (Total - Imp)', 'Total Fotos', '1ª Leitura', 'Última Leitura'
                 ]
 
                 st.subheader("📋 Tabela Resumo Consolidada")
-                st.dataframe(df_resumo, use_container_width=True)
+                st.dataframe(df_resumo_final, use_container_width=True)
 
                 # Exportação Excel
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_resumo.to_excel(writer, index=False, sheet_name='Resumo')
+                    df_resumo_final.to_excel(writer, index=False, sheet_name='Resumo')
 
                 st.download_button(
                     label="📥 Baixar Excel Consolidado",
