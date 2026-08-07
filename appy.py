@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import io
 
 st.set_page_config(page_title="Painel de Performance - Alta Carga", layout="wide")
-st.title("⚡ Painel Operacional (Com Cálculo de Leituras Limpas)")
+st.title("⚡ Painel Operacional (Com Urbana/Rural, Tipos e Leituras Limpas)")
 st.markdown("---")
 
 uploaded_files = st.file_uploader(
@@ -56,6 +55,7 @@ if uploaded_files:
                             return op
                     return None
 
+                # Mapeamento de Colunas Padrão
                 col_cod_agente = buscar_coluna_exata(['COD_AGENTE', 'CODIGO_AGENTE', 'COD_LEITOR'])
                 col_nome_agente = buscar_coluna_exata(['AGENTE', 'NOM_AGENTE', 'NOME_AGENTE', 'NOME_LEITOR'])
                 col_dt_ini = buscar_coluna_exata(['DT_INI_ACAO', 'DATA_LEITURA', 'DT_INICIO'])
@@ -119,9 +119,7 @@ if uploaded_files:
                 df['IMP_GRUPO_1'] = (s_vis.str.startswith('1') | s_rev.str.startswith('1') | s_ger.str.startswith('1')).astype('int8')
                 df['IMP_GRUPO_2'] = (s_vis.str.startswith('2') | s_rev.str.startswith('2') | s_ger.str.startswith('2')).astype('int8')
 
-                # Marcação de Impedimento Total (linha a linha)
                 df['TEM_IMPEDIMENTO'] = ((df['IMP_GRUPO_1'] == 1) | (df['IMP_GRUPO_2'] == 1)).astype('int8')
-                # Marcação de Leitura Limpa (1 = Sem impedimento, 0 = Com impedimento)
                 df['LEITURA_LIMPA'] = (df['TEM_IMPEDIMENTO'] == 0).astype('int8')
 
                 if col_foto and col_foto in df.columns:
@@ -129,22 +127,24 @@ if uploaded_files:
                 else:
                     df['QTD_FOTO_NUM'] = 0
 
-                # Outras Colunas Organizacionais
-                for col_std, opcoes in {
-                    'NOM_BASE_OPERACIONAL': ['NOM_BASE_OPERACIONAL', 'BASE'],
-                    'NOM_MUNICIPIO': ['NOM_MUNICIPIO', 'MUNICIPIO'],
-                    'LOTE': ['LOTE'],
-                    'LOCALIZACAO': ['LOCALIZACAO'],
-                    'NOM_UNIDADE_LEITURA': ['NOM_UNIDADE_LEITURA', 'UNIDADE_LEITURA'],
-                    'IND_TIPO': ['IND_TIPO', 'TIPO_LEITURA']
-                }.items():
+                # 5. MAPEAMENTO DE OUTRAS COLUNAS (INCLUINDO URBANA/RURAL E TIPO DE LEITURA)
+                mapeamento_colunas = {
+                    'NOM_BASE_OPERACIONAL': ['NOM_BASE_OPERACIONAL', 'BASE', 'BASE_OPERACIONAL'],
+                    'NOM_MUNICIPIO': ['NOM_MUNICIPIO', 'MUNICIPIO', 'CIDADE'],
+                    'LOTE': ['LOTE', 'NUM_LOTE'],
+                    'AREA_ZONA': ['ZONA', 'AREA', 'TIPO_AREA', 'URBANA_RURAL', 'SITUACAO', 'IND_URBANO_RURAL', 'LOCALIZACAO'],
+                    'TIPO_LEITURA': ['IND_TIPO', 'TIPO_LEITURA', 'TIPO_SERVICO', 'TIPO'],
+                    'NOM_UNIDADE_LEITURA': ['NOM_UNIDADE_LEITURA', 'UNIDADE_LEITURA', 'UNIDADE']
+                }
+
+                for col_std, opcoes in mapeamento_colunas.items():
                     c = buscar_coluna_exata(opcoes)
                     if c:
                         df[col_std] = df[c].fillna('N/A').astype(str).astype('category')
                     else:
                         df[col_std] = pd.Series(['N/A'] * len(df), dtype='category')
 
-            # 5. FILTROS NA SIDEBAR
+            # 6. FILTROS NA SIDEBAR
             st.sidebar.header("🎯 Filtros")
 
             def criar_multiselect(label, col_name):
@@ -156,14 +156,18 @@ if uploaded_files:
             f_base = criar_multiselect("Base Operacional", 'NOM_BASE_OPERACIONAL')
             f_mun = criar_multiselect("Município", 'NOM_MUNICIPIO')
             f_lote = criar_multiselect("Lote", 'LOTE')
+            f_zona = criar_multiselect("Área / Zona (Urbana/Rural)", 'AREA_ZONA')
+            f_tipo = criar_multiselect("Tipo de Leitura", 'TIPO_LEITURA')
             f_agente = criar_multiselect("Agente", 'AGENTE_COMPLETO')
             f_data = criar_multiselect("Data da Leitura", 'DATA_LEITURA')
 
-            # Filtragem Rápida
+            # Filtragem Rápida em Categoria
             df_filtrado = df[
                 (df['NOM_BASE_OPERACIONAL'].isin(f_base)) &
                 (df['NOM_MUNICIPIO'].isin(f_mun)) &
                 (df['LOTE'].isin(f_lote)) &
+                (df['AREA_ZONA'].isin(f_zona)) &
+                (df['TIPO_LEITURA'].isin(f_tipo)) &
                 (df['AGENTE_COMPLETO'].isin(f_agente)) &
                 (df['DATA_LEITURA'].isin(f_data))
             ]
@@ -171,13 +175,11 @@ if uploaded_files:
             if df_filtrado.empty:
                 st.warning("⚠️ Nenhum registro encontrado para os filtros selecionados.")
             else:
-                # 6. MÉTRICAS CONSOLIDADAS (SUBTRAÇÃO EXPLÍCITA)
+                # 7. MÉTRICAS CONSOLIDADAS
                 tot_leituras = len(df_filtrado)
                 tot_g1 = int(df_filtrado['IMP_GRUPO_1'].sum())
                 tot_g2 = int(df_filtrado['IMP_GRUPO_2'].sum())
                 tot_impedimentos = int(df_filtrado['TEM_IMPEDIMENTO'].sum())
-                
-                # CÁLCULO DIRETO: TOTAL - IMPEDIMENTOS
                 leituras_limpas = tot_leituras - tot_impedimentos
                 pct_limpas = (leituras_limpas / tot_leituras * 100) if tot_leituras > 0 else 0
                 tot_fotos = int(df_filtrado['QTD_FOTO_NUM'].sum())
@@ -198,10 +200,11 @@ if uploaded_files:
                     res = v.min() if tipo == 'min' else v.max()
                     return res.strftime('%H:%M') if pd.notna(res) else "N/A"
 
-                # 7. TABELA RESUMO (GROUPBY ULTRARRÁPIDO COM SUBTRAÇÃO)
+                # 8. TABELA RESUMO CONSOLIDADA (COM ZONA E TIPO)
                 df_resumo = df_filtrado.groupby([
                     'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
-                    'NOM_MUNICIPIO', 'LOTE', 'COD_AGENTE_STD', 'AGENTE_STD'
+                    'NOM_MUNICIPIO', 'LOTE', 'AREA_ZONA', 'TIPO_LEITURA',
+                    'COD_AGENTE_STD', 'AGENTE_STD'
                 ], as_index=False, observed=True).agg(
                     TOTAL_LEITURAS=('AGENTE_STD', 'count'),
                     IMP_GRUPO_1=('IMP_GRUPO_1', 'sum'),
@@ -213,17 +216,18 @@ if uploaded_files:
                     HORA_FIM=('DT_INI_DT', lambda x: hora_min_max(x, 'max'))
                 )
 
-                # Organizando colunas na ordem exata
                 df_resumo_final = df_resumo[[
                     'DATA_LEITURA', 'DATA_PREVISTA_STR', 'NOM_BASE_OPERACIONAL',
-                    'NOM_MUNICIPIO', 'LOTE', 'COD_AGENTE_STD', 'AGENTE_STD',
+                    'NOM_MUNICIPIO', 'LOTE', 'AREA_ZONA', 'TIPO_LEITURA',
+                    'COD_AGENTE_STD', 'AGENTE_STD',
                     'TOTAL_LEITURAS', 'IMP_GRUPO_1', 'IMP_GRUPO_2', 'TOTAL_IMPEDIMENTOS',
                     'LEITURAS_LIMPAS', 'TOTAL_FOTOS', 'HORA_INI', 'HORA_FIM'
                 ]]
 
                 df_resumo_final.columns = [
                     'Data Realização', 'Data Prevista', 'Base Operacional',
-                    'Município', 'Lote', 'Código Agente', 'Nome Agente',
+                    'Município', 'Lote', 'Zona / Área', 'Tipo Leitura',
+                    'Código Agente', 'Nome Agente',
                     'Total Leituras', 'Imp. Grupo 1', 'Imp. Grupo 2', 'Total Impedimentos',
                     '✅ Leituras Limpas (Total - Imp)', 'Total Fotos', '1ª Leitura', 'Última Leitura'
                 ]
