@@ -4,7 +4,7 @@ import plotly.express as px
 import io
 
 st.set_page_config(page_title="Painel de Performance - Alta Carga", layout="wide")
-st.title("⚡ Painel Operacional (Modo de Alta Performance - Datas Corrigidas)")
+st.title("⚡ Painel Operacional (Suporte a Latin1/CP1252 - 500k+ Linhas)")
 st.markdown("---")
 
 uploaded_files = st.file_uploader(
@@ -19,22 +19,23 @@ if uploaded_files:
         
         for file in uploaded_files:
             df_temp = None
-            if file.name.endswith('.csv'):
-                for sep in [';', ',', '\t']:
-                    for enc in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+            if file.name.lower().endswith('.csv'):
+                # Prioriza as codificações brasileiras padrão (Latin1, CP1252) antes do UTF-8
+                for enc in ['latin1', 'cp1252', 'iso-8859-1', 'utf-8-sig', 'utf-8']:
+                    for sep in [';', ',', '\t']:
                         try:
                             file.seek(0)
-                            df_temp = pd.read_csv(file, sep=sep, encoding=enc, engine='pyarrow')
-                            if len(df_temp.columns) > 1:
+                            df_temp = pd.read_csv(
+                                file, 
+                                sep=sep, 
+                                encoding=enc, 
+                                low_memory=False, 
+                                on_bad_lines='skip'
+                            )
+                            if df_temp is not None and len(df_temp.columns) > 1:
                                 break
                         except Exception:
-                            try:
-                                file.seek(0)
-                                df_temp = pd.read_csv(file, sep=sep, encoding=enc, low_memory=False)
-                                if len(df_temp.columns) > 1:
-                                    break
-                            except Exception:
-                                continue
+                            continue
                     if df_temp is not None and len(df_temp.columns) > 1:
                         break
             else:
@@ -44,7 +45,7 @@ if uploaded_files:
                 lista_dfs.append(df_temp)
 
         if lista_dfs:
-            with st.spinner("🚀 Processando grande volume de dados e corrigindo datas..."):
+            with st.spinner("🚀 Processando grande volume de dados..."):
                 df = pd.concat(lista_dfs, ignore_index=True)
 
                 # 1. NORMALIZAÇÃO RÁPIDA DE COLUNAS
@@ -88,22 +89,21 @@ if uploaded_files:
                     s_str = df[col_name].astype(str).str.strip()
                     dt_series = pd.Series(pd.NaT, index=df.index)
 
-                    # Passo A: Formatos ISO (YYYY-MM-DD HH:MM:SS ou YYYY-MM-DD)
+                    # Passo A: Formatos ISO (YYYY-MM-DD)
                     mask_iso = s_str.str.match(r'^\d{4}-\d{2}-\d{2}')
                     if mask_iso.any():
                         dt_series[mask_iso] = pd.to_datetime(s_str[mask_iso], errors='coerce')
 
-                    # Passo B: Formatos BR (DD/MM/YYYY HH:MM:SS ou DD/MM/YYYY)
+                    # Passo B: Formatos BR (DD/MM/YYYY)
                     mask_br = s_str.str.match(r'^\d{2}/\d{2}/\d{4}')
                     if mask_br.any():
                         dt_series[mask_br] = pd.to_datetime(s_str[mask_br], dayfirst=True, errors='coerce')
 
-                    # Passo C: Fallback para quaisquer formatos restantes
+                    # Passo C: Fallback para formatos restantes
                     mask_restante = dt_series.isna() & (s_str != 'nan') & (s_str != 'N/A')
                     if mask_restante.any():
                         dt_series[mask_restante] = pd.to_datetime(s_str[mask_restante], errors='coerce', format='mixed')
 
-                    # Formatação final brasileira fixa DD/MM/AAAA
                     str_series = dt_series.dt.strftime('%d/%m/%Y').fillna('Sem Data').astype('category')
                     return str_series, dt_series
 
