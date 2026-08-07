@@ -24,11 +24,14 @@ if uploaded_files:
                 for enc in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
                     try:
                         file.seek(0)
-                        temp = pd.read_csv(file, sep=';', encoding=enc)
-                        if len(temp.columns) <= 1:
-                            file.seek(0)
-                            temp = pd.read_csv(file, sep=',', encoding=enc)
-                        df_temp = temp
+                        # Leitura com motor Python flexível para suportar quebras de linha em campos
+                        df_temp = pd.read_csv(
+                            file, 
+                            sep=None, 
+                            encoding=enc, 
+                            engine='python',
+                            on_bad_lines='skip'
+                        )
                         break
                     except Exception:
                         continue
@@ -41,15 +44,40 @@ if uploaded_files:
         if lista_dfs:
             df_raw = pd.concat(lista_dfs, ignore_index=True)
             df_raw.columns = df_raw.columns.str.strip()
+            
+            # 🧹 HIGIENIZAÇÃO GERAL EM TODAS AS COLUNAS
+            # Substitui quebras de linha (\n / \r) e limpa espaços em TODAS as colunas de texto
+            for col in df_raw.columns:
+                if df_raw[col].dtype == 'object':
+                    df_raw[col] = (
+                        df_raw[col]
+                        .astype(str)
+                        .str.replace(r'[\r\n]+', ' ', regex=True) # Troca quebra de linha por espaço
+                        .str.replace(r'\s+', ' ', regex=True)     # Remove múltiplos espaços
+                        .str.strip()
+                    )
 
-            # 1. Regra Fundamental: Filtrar apenas TIPO_ATIVIDADE == 'Leitura'
+            total_linhas_brutas = len(df_raw)
+
+            # 1. Filtro Flexível: Considera qualquer variação da palavra 'leitura'
             if 'TIPO_ATIVIDADE' in df_raw.columns:
-                df = df_raw[df_raw['TIPO_ATIVIDADE'].astype(str).str.strip().str.lower() == 'leitura'].copy()
+                df = df_raw[df_raw['TIPO_ATIVIDADE'].str.lower().str.contains('leitura', na=False)].copy()
             else:
                 df = df_raw.copy()
 
+            total_linhas_processadas = len(df)
+            descartadas = total_linhas_brutas - total_linhas_processadas
+
+            # Diagnóstico visual de carga
+            st.info(
+                f"ℹ️ **Diagnóstico de Carga de Dados:** "
+                f"Foram identificadas **{total_linhas_brutas} linhas** no arquivo. "
+                f"**{total_linhas_processadas} linhas** foram processadas como atividades de leitura. "
+                f"({descartadas} linhas de início de turno/deslocamento foram descartadas)."
+            )
+
             if df.empty:
-                st.warning("⚠️ Nenhum registro de 'Leitura' encontrado no arquivo enviado.")
+                st.warning("⚠️ Nenhum registro contendo 'Leitura' foi encontrado na coluna TIPO_ATIVIDADE.")
             else:
                 # 2. Tratamento de Datas e Horários (DT_INI_ACAO)
                 df['DT_INI_DT'] = pd.to_datetime(df['DT_INI_ACAO'], dayfirst=True, errors='coerce')
@@ -65,7 +93,7 @@ if uploaded_files:
 
                 # 4. Tratamento dos Impedimentos (IND_STATUS_VISITA e COD_NOTA_VISITA)
                 def limpa_nota_codigo(val):
-                    if pd.isna(val):
+                    if pd.isna(val) or str(val).strip() in ['nan', 'None', '']:
                         return ""
                     s = str(val).strip()
                     if s.endswith('.0'):
@@ -80,7 +108,7 @@ if uploaded_files:
                 df['IMP_FAM_1'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('1')
                 df['IMP_FAM_2'] = is_impedimento & df['NOTA_COD_STR'].str.startswith('2')
 
-                # Padronização das colunas
+                # Padronização de Colunas Categóricas
                 colunas_texto = [
                     'NOM_BASE_OPERACIONAL', 'NOM_MUNICIPIO', 'LOTE', 
                     'LOCALIZACAO', 'NOM_UNIDADE_LEITURA', 'IND_TIPO', 
@@ -88,7 +116,7 @@ if uploaded_files:
                 ]
                 for col in colunas_texto:
                     if col in df.columns:
-                        df[col] = df[col].astype(str).str.strip().replace({'nan': 'N/A', '': 'N/A'})
+                        df[col] = df[col].replace({'nan': 'N/A', '': 'N/A', 'None': 'N/A'})
                     else:
                         df[col] = 'N/A'
 
@@ -134,14 +162,13 @@ if uploaded_files:
                 if df_filtrado.empty:
                     st.warning("Nenhum registro encontrado com os filtros selecionados.")
                 else:
-                    # Cálculo dos Totais das Métricas
+                    # Métricas
                     total_geral = len(df_filtrado)
                     imp_fam1 = int(df_filtrado['IMP_FAM_1'].sum())
                     imp_fam2 = int(df_filtrado['IMP_FAM_2'].sum())
                     total_impedimentos = imp_fam1 + imp_fam2
                     leituras_sem_imp = total_geral - total_impedimentos
 
-                    # Cards de Métricas
                     c1, c2, c3, c4, c5 = st.columns(5)
                     c1.metric("Total de Leituras", total_geral)
                     c2.metric("Leituras sem Impedimento", leituras_sem_imp)
@@ -151,7 +178,6 @@ if uploaded_files:
 
                     st.markdown("---")
 
-                    # Funções de Apoio para Horários
                     def min_hora(series):
                         valid = series.dropna()
                         return valid.min().strftime('%H:%M') if not valid.empty else "N/A"
@@ -160,7 +186,7 @@ if uploaded_files:
                         valid = series.dropna()
                         return valid.max().strftime('%H:%M') if not valid.empty else "N/A"
 
-                    # 5. Agrupamento Detalhado
+                    # Agrupamento final
                     df_resumo = df_filtrado.groupby([
                         'DATA_LEITURA',
                         'DATA_PREVISTA_STR',
@@ -180,12 +206,10 @@ if uploaded_files:
                         IMPEDIMENTOS_FAM_2=('IMP_FAM_2', 'sum')
                     ).reset_index()
 
-                    # Cálculo da nova coluna: Leituras sem Impedimento
                     df_resumo['LEITURAS_SEM_IMPEDIMENTO'] = df_resumo['TOTAL_LEITURAS'] - (
                         df_resumo['IMPEDIMENTOS_FAM_1'] + df_resumo['IMPEDIMENTOS_FAM_2']
                     )
 
-                    # Reorganizando a ordem das colunas para apresentação e exportação
                     df_resumo = df_resumo[[
                         'DATA_LEITURA',
                         'DATA_PREVISTA_STR',
@@ -244,7 +268,7 @@ if uploaded_files:
                     st.subheader("📋 Tabela Resumo da Produção")
                     st.dataframe(df_resumo, use_container_width=True)
 
-                    # Exportação para Excel
+                    # Botão para Download
                     buffer = io.BytesIO()
                     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                         df_resumo.to_excel(writer, index=False, sheet_name='Resumo Leituras e Lotes')
